@@ -58,15 +58,15 @@ impl Buffer {
             return Err(os_error("shm_open failed"));
         }
 
-        // resize the file to length
-        let ret = unsafe { libc::ftruncate(file_desc, size as libc::off_t) };
+        // resize the file to double size
+        let ret = unsafe { libc::ftruncate(file_desc, 2 * size as libc::off_t) };
         if ret != 0 {
             let ret = os_error("ftruncate failed");
             unsafe { libc::close(file_desc) };
             return Err(ret);
         }
 
-        // map with double length
+        // map with double size
         let first_copy = unsafe {
             libc::mmap(
                 ptr::null_mut(),
