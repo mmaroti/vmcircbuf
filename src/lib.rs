@@ -1,6 +1,5 @@
 use std::ffi::CString;
 use std::io::{Error, ErrorKind};
-use std::os::raw::c_char;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::{cmp, process, ptr, slice};
 
@@ -36,11 +35,18 @@ unsafe fn os_page_size() -> Result<usize, Error> {
 }
 
 #[cfg(unix)]
-unsafe fn os_create(name: *const c_char, size: usize, wrap: usize) -> Result<Buffer, Error> {
+unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Error> {
     extern crate libc;
 
+    // convert name to c-string
+    let name = CString::new(name)?;
+
     // create temporary shared memory file
-    let file_desc = libc::shm_open(name, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL, 0o600);
+    let file_desc = libc::shm_open(
+        name.as_ptr(),
+        libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+        0o600,
+    );
     if file_desc < 0 {
         return Err(os_error("shm_open failed"));
     }
@@ -101,7 +107,7 @@ unsafe fn os_create(name: *const c_char, size: usize, wrap: usize) -> Result<Buf
     }
 
     // unlink the shared memory
-    let ret = libc::shm_unlink(name);
+    let ret = libc::shm_unlink(name.as_ptr());
     if ret != 0 {
         return Err(os_error("shm_unlink failed"));
     }
@@ -136,11 +142,14 @@ unsafe fn os_page_size() -> Result<usize, Error> {
 }
 
 #[cfg(windows)]
-unsafe fn os_create(name: *const c_char, size: usize, wrap: usize) -> Result<Buffer, Error> {
+unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Error> {
     extern crate winapi;
     use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
-    use winapi::um::winbase::CreateFileMappingA;
+    use winapi::um::memoryapi::CreateFileMappingW;
     use winapi::um::winnt::PAGE_READWRITE;
+
+    // encode name as WSTR
+    let name: Vec<u16> = OsStr::new(name).encode_wide().chain(once(0)).collect();
 
     // create a paging file
     let handle = CreateFileMappingA(
@@ -149,7 +158,7 @@ unsafe fn os_create(name: *const c_char, size: usize, wrap: usize) -> Result<Buf
         PAGE_READWRITE,
         0,
         size,
-        name,
+        name.as_ptr(),
     );
     if handle == ptr::null_mut() || handle == INVALID_HANDLE_VALUE {
         return Err(os_error("CreateFileMappingA failed"));
@@ -188,13 +197,13 @@ impl Buffer {
         }
 
         // create temporary file name
-        let name = CString::new(format!(
+        let name = format!(
             "/rust-vmcircbuf-{}-{}",
             process::id(),
             BUFFER_ID.fetch_add(1, Ordering::Relaxed)
-        ))?;
+        );
 
-        unsafe { os_create(name.as_ptr(), size, wrap) }
+        unsafe { os_create(&name, size, wrap) }
     }
 
     /// Returns the size of the circular buffer.
