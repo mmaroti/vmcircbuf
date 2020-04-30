@@ -1,12 +1,8 @@
 use std::ffi::CString;
 use std::io::{Error, ErrorKind};
+use std::os::raw::c_char;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::{cmp, slice};
-
-#[cfg(unix)]
-extern crate libc;
-#[cfg(windows)]
-extern crate winapi;
+use std::{cmp, process, ptr, slice};
 
 /// A unique identifier used to create shared memory mapped files.
 static BUFFER_ID: AtomicI32 = AtomicI32::new(0);
@@ -29,6 +25,8 @@ fn os_error(message: &'static str) -> Error {
 
 #[cfg(unix)]
 fn os_page_size() -> Result<usize, Error> {
+    extern crate libc;
+
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
     if page <= 0 {
         Err(os_error("page_size failed"))
@@ -38,31 +36,12 @@ fn os_page_size() -> Result<usize, Error> {
 }
 
 #[cfg(unix)]
-fn os_create(mut size: usize, mut wrap: usize) -> Result<Buffer, Error> {
-    let page = Buffer::page_size()?;
-
-    // round up to a multiple of the page size, be safe
-    size = cmp::max(size, page);
-    size = ((size + page - 1) / page) * page;
-    wrap = cmp::max(wrap, page);
-    wrap = ((wrap + page - 1) / page) * page;
-    if size + wrap > libc::off_t::max_value() as usize {
-        return Err(Error::new(ErrorKind::Other, "invalid sizes"));
-    }
+fn os_create(name: *const c_char, size: usize, wrap: usize) -> Result<Buffer, Error> {
+    extern crate libc;
 
     // create temporary shared memory file
-    let name = CString::new(format!(
-        "/rust-vmcircbuf-{}-{}",
-        std::process::id(),
-        BUFFER_ID.fetch_add(1, Ordering::Relaxed)
-    ))?;
-    let file_desc = unsafe {
-        libc::shm_open(
-            name.as_ptr(),
-            libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
-            0o600,
-        )
-    };
+    let file_desc =
+        unsafe { libc::shm_open(name, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL, 0o600) };
     if file_desc < 0 {
         return Err(os_error("shm_open failed"));
     }
@@ -78,7 +57,7 @@ fn os_create(mut size: usize, mut wrap: usize) -> Result<Buffer, Error> {
     // map with it fully
     let first_copy = unsafe {
         libc::mmap(
-            std::ptr::null_mut(),
+            ptr::null_mut(),
             size + wrap,
             libc::PROT_READ | libc::PROT_WRITE,
             libc::MAP_SHARED,
@@ -127,7 +106,7 @@ fn os_create(mut size: usize, mut wrap: usize) -> Result<Buffer, Error> {
     }
 
     // unlink the shared memory
-    let ret = unsafe { libc::shm_unlink(name.as_ptr()) };
+    let ret = unsafe { libc::shm_unlink(name) };
     if ret != 0 {
         return Err(os_error("shm_unlink failed"));
     }
@@ -142,6 +121,8 @@ fn os_create(mut size: usize, mut wrap: usize) -> Result<Buffer, Error> {
 #[cfg(unix)]
 impl Drop for Buffer {
     fn drop(&mut self) {
+        extern crate libc;
+
         let ptr = self.ptr as *mut libc::c_void;
         let ret = unsafe { libc::munmap(ptr, 2 * self.size) };
         assert_eq!(ret, 0);
@@ -150,16 +131,18 @@ impl Drop for Buffer {
 
 #[cfg(windows)]
 fn os_page_size() -> Result<usize, Error> {
-    let mut info = std::mem::zeroed();
-    winapi::um::sysinfoapi::GetSystemInfo(&mut info);
-    return Ok(info.dwAllocationGranularity as usize);
+    extern crate winapi;
+    use std::mem;
+    use winapi::um::sysinfoapi::GetSystemInfo;
+
+    let mut info = mem::zeroed();
+    GetSystemInfo(&mut info);
+    Ok(info.dwAllocationGranularity as usize)
 }
 
 #[cfg(windows)]
-fn os_create(mut size: usize, mut wrap: usize) -> Result<Buffer, Error> {
-    let page = Buffer::page_size()?;
-
-    Err(Error::new(ErrorKind::Other, "not implemented"));
+fn os_create(name: *const c_char, size: usize, wrap: usize) -> Result<Buffer, Error> {
+    Err(Error::new(ErrorKind::Other, "not implemented"))
 }
 
 impl Buffer {
@@ -173,9 +156,26 @@ impl Buffer {
     /// returned `size` and `wrap` will be rounded up to an integer multiple
     /// of the page size. The `wrap` value cannot be larger than `size`, and
     /// both can be zero to get the page size.
-    #[inline(always)]
-    pub fn new(size: usize, wrap: usize) -> Result<Buffer, Error> {
-        os_create(size, wrap)
+    pub fn new(mut size: usize, mut wrap: usize) -> Result<Buffer, Error> {
+        let page = Buffer::page_size()?;
+
+        // round up to a multiple of the page size, be safe
+        size = cmp::max(size, page);
+        size = ((size + page - 1) / page) * page;
+        wrap = cmp::max(wrap, page);
+        wrap = ((wrap + page - 1) / page) * page;
+        if size + wrap > libc::off_t::max_value() as usize {
+            return Err(Error::new(ErrorKind::Other, "invalid sizes"));
+        }
+
+        // create temporary file name
+        let name = CString::new(format!(
+            "/rust-vmcircbuf-{}-{}",
+            process::id(),
+            BUFFER_ID.fetch_add(1, Ordering::Relaxed)
+        ))?;
+
+        os_create(name.as_ptr(), size, wrap)
     }
 
     /// Returns the size of the circular buffer.
