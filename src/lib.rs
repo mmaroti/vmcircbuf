@@ -163,6 +163,8 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
     use std::ffi::OsStr;
     use std::iter;
     use std::os::windows::ffi::OsStrExt;
+    use winapi::shared::basetsd::SIZE_T;
+    use winapi::shared::minwindef::DWORD;
     use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
     use winapi::um::memoryapi::{
         CreateFileMappingW, MapViewOfFileEx, UnmapViewOfFile, VirtualAlloc, VirtualFree,
@@ -182,8 +184,8 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
         INVALID_HANDLE_VALUE,
         ptr::null_mut(),
         PAGE_READWRITE,
-        (size >> 32) as u32,
-        size as u32,
+        (size >> 32) as DWORD,
+        size as DWORD,
         name.as_ptr(),
     );
     if handle == ptr::null_mut() || handle == INVALID_HANDLE_VALUE {
@@ -194,7 +196,12 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
     // allocate virtual memory
     let mut first_copy = ptr::null_mut();
     if err.is_none() {
-        first_copy = VirtualAlloc(ptr::null_mut(), size + wrap, MEM_RESERVE, PAGE_NOACCESS);
+        first_copy = VirtualAlloc(
+            ptr::null_mut(),
+            (size + wrap) as SIZE_T,
+            MEM_RESERVE,
+            PAGE_NOACCESS,
+        );
         if first_copy == ptr::null_mut() {
             err = Some(os_error("VirtualAlloc failed"));
         }
@@ -202,7 +209,7 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
 
     // and free it, we need the address only
     if err.is_none() {
-        let ret = VirtualFree(first_copy, 0, MEM_RELEASE);
+        let ret = VirtualFree(first_copy, (size + wrap) as SIZE_T, MEM_RELEASE);
         if ret == 0 {
             err = Some(os_error("VirtualFree failed"));
         }
@@ -210,7 +217,7 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
 
     // map first copy
     if err.is_none() {
-        let first_temp = MapViewOfFileEx(handle, FILE_MAP_WRITE, 0, 0, size, first_copy);
+        let first_temp = MapViewOfFileEx(handle, FILE_MAP_WRITE, 0, 0, size as SIZE_T, first_copy);
         if first_temp == ptr::null_mut() {
             err = Some(os_error("first MapViewOfFileEx failed"));
         } else if first_temp != first_copy {
@@ -220,7 +227,14 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
 
     // map second copy
     if err.is_none() {
-        let second_copy = MapViewOfFileEx(handle, FILE_MAP_WRITE, 0, 0, wrap, first_copy.add(size));
+        let second_copy = MapViewOfFileEx(
+            handle,
+            FILE_MAP_WRITE,
+            0,
+            0,
+            wrap as SIZE_T,
+            first_copy.add(size),
+        );
         if second_copy == ptr::null_mut() {
             err = Some(os_error("second MapViewOfFileEx failed"));
         } else if second_copy != first_copy.add(size) {
