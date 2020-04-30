@@ -2,13 +2,17 @@
 name = "vmcircbuf"
 description = "A circular buffer that magically wraps around without any copying"
 readme = "README.md"
-version = "0.1.1"
+version = "0.1.2"
 license = "MIT"
 authors = ["Miklos Maroti <mmaroti@gmail.com>"]
 repository = "https://github.com/mmaroti/vmcircbuf/"
 edition = "2018"
+keywords = ["mmap", "circbuf"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["basetsd", "handleapi", "memoryapi", "minwindef", "std", "sysinfoapi"] }

@@ -1,8 +1,12 @@
-extern crate libc;
 use std::ffi::CString;
 use std::io::{Error, ErrorKind};
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::{cmp, process, ptr, slice};
+use std::{cmp, slice};
+
+#[cfg(unix)]
+extern crate libc;
+#[cfg(windows)]
+extern crate winapi;
 
 /// A unique identifier used to create shared memory mapped files.
 static BUFFER_ID: AtomicI32 = AtomicI32::new(0);
@@ -23,120 +27,155 @@ fn os_error(message: &'static str) -> Error {
     Error::new(kind, message)
 }
 
+#[cfg(unix)]
+fn os_page_size() -> Result<usize, Error> {
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page <= 0 {
+        Err(os_error("page_size failed"))
+    } else {
+        Ok(page as usize)
+    }
+}
+
+#[cfg(unix)]
+fn os_create(mut size: usize, mut wrap: usize) -> Result<Buffer, Error> {
+    let page = Buffer::page_size()?;
+
+    // round up to a multiple of the page size, be safe
+    size = cmp::max(size, page);
+    size = ((size + page - 1) / page) * page;
+    wrap = cmp::max(wrap, page);
+    wrap = ((wrap + page - 1) / page) * page;
+    if size + wrap > libc::off_t::max_value() as usize {
+        return Err(Error::new(ErrorKind::Other, "invalid sizes"));
+    }
+
+    // create temporary shared memory file
+    let name = CString::new(format!(
+        "/rust-vmcircbuf-{}-{}",
+        std::process::id(),
+        BUFFER_ID.fetch_add(1, Ordering::Relaxed)
+    ))?;
+    let file_desc = unsafe {
+        libc::shm_open(
+            name.as_ptr(),
+            libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+            0o600,
+        )
+    };
+    if file_desc < 0 {
+        return Err(os_error("shm_open failed"));
+    }
+
+    // truncate the file to size + wrap
+    let ret = unsafe { libc::ftruncate(file_desc, (size + wrap) as libc::off_t) };
+    if ret != 0 {
+        let ret = os_error("first ftruncate failed");
+        unsafe { libc::close(file_desc) };
+        return Err(ret);
+    }
+
+    // map with it fully
+    let first_copy = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            size + wrap,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            file_desc,
+            0,
+        )
+    };
+    if first_copy == libc::MAP_FAILED {
+        let ret = os_error("first mmap failed");
+        unsafe { libc::close(file_desc) };
+        return Err(ret);
+    }
+
+    // unmap the second wrap half
+    let ret = unsafe { libc::munmap(first_copy.add(size), wrap) };
+    if ret != 0 {
+        let ret = os_error("munmap failed");
+        unsafe { libc::close(file_desc) };
+        return Err(ret);
+    }
+
+    // memory map the wrap part again
+    let second_copy = unsafe {
+        libc::mmap(
+            first_copy.add(size),
+            wrap,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            file_desc,
+            0,
+        )
+    };
+    if second_copy == libc::MAP_FAILED {
+        let ret = os_error("second mmap failed");
+        unsafe { libc::close(file_desc) };
+        return Err(ret);
+    } else if second_copy != unsafe { first_copy.add(size) } {
+        unsafe { libc::close(file_desc) };
+        return Err(Error::new(ErrorKind::Other, "bad second address"));
+    }
+
+    // close the file descriptor
+    let ret = unsafe { libc::close(file_desc) };
+    if ret != 0 {
+        return Err(os_error("close failed"));
+    }
+
+    // unlink the shared memory
+    let ret = unsafe { libc::shm_unlink(name.as_ptr()) };
+    if ret != 0 {
+        return Err(os_error("shm_unlink failed"));
+    }
+
+    Ok(Buffer {
+        ptr: first_copy as *const u8,
+        size,
+        wrap,
+    })
+}
+
+#[cfg(unix)]
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        let ptr = self.ptr as *mut libc::c_void;
+        let ret = unsafe { libc::munmap(ptr, 2 * self.size) };
+        assert_eq!(ret, 0);
+    }
+}
+
+#[cfg(windows)]
+fn os_page_size() -> Result<usize, Error> {
+    let mut info = std::mem::zeroed();
+    winapi::um::sysinfoapi::GetSystemInfo(&mut info);
+    return Ok(info.dwAllocationGranularity as usize);
+}
+
+#[cfg(windows)]
+fn os_create(mut size: usize, mut wrap: usize) -> Result<Buffer, Error> {
+    let page = Buffer::page_size()?;
+
+    Err(Error::new(ErrorKind::Other, "not implemented"));
+}
+
 impl Buffer {
     /// Returns the page size of the underlying operating system.
+    #[inline(always)]
     pub fn page_size() -> Result<usize, Error> {
-        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-        if page <= 0 {
-            Err(os_error("page_size failed"))
-        } else {
-            Ok(page as usize)
-        }
+        os_page_size()
     }
 
     /// Creates a new circular buffer with the given `size` and `wrap`. The
     /// returned `size` and `wrap` will be rounded up to an integer multiple
     /// of the page size. The `wrap` value cannot be larger than `size`, and
     /// both can be zero to get the page size.
-    pub fn new(mut size: usize, mut wrap: usize) -> Result<Buffer, Error> {
-        let page = Buffer::page_size()?;
-
-        // round up to a multiple of the page size, be safe
-        size = cmp::max(size, page);
-        size = ((size + page - 1) / page) * page;
-        wrap = cmp::max(wrap, page);
-        wrap = ((wrap + page - 1) / page) * page;
-        if size + wrap > libc::off_t::max_value() as usize {
-            return Err(Error::new(ErrorKind::Other, "invalid sizes"));
-        }
-
-        // create temporary shared memory file
-        let name = CString::new(format!(
-            "/rust-vmcircbuf-{}-{}",
-            process::id(),
-            BUFFER_ID.fetch_add(1, Ordering::Relaxed)
-        ))?;
-        let file_desc = unsafe {
-            libc::shm_open(
-                name.as_ptr(),
-                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
-                0o600,
-            )
-        };
-        if file_desc < 0 {
-            return Err(os_error("shm_open failed"));
-        }
-
-        // truncate the file to size + wrap
-        let ret = unsafe { libc::ftruncate(file_desc, (size + wrap) as libc::off_t) };
-        if ret != 0 {
-            let ret = os_error("first ftruncate failed");
-            unsafe { libc::close(file_desc) };
-            return Err(ret);
-        }
-
-        // map with it fully
-        let first_copy = unsafe {
-            libc::mmap(
-                ptr::null_mut(),
-                size + wrap,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                file_desc,
-                0,
-            )
-        };
-        if first_copy == libc::MAP_FAILED {
-            let ret = os_error("first mmap failed");
-            unsafe { libc::close(file_desc) };
-            return Err(ret);
-        }
-
-        // unmap the second wrap half
-        let ret = unsafe { libc::munmap(first_copy.add(size), wrap) };
-        if ret != 0 {
-            let ret = os_error("munmap failed");
-            unsafe { libc::close(file_desc) };
-            return Err(ret);
-        }
-
-        // memory map the wrap part again
-        let second_copy = unsafe {
-            libc::mmap(
-                first_copy.add(size),
-                wrap,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                file_desc,
-                0,
-            )
-        };
-        if second_copy == libc::MAP_FAILED {
-            let ret = os_error("second mmap failed");
-            unsafe { libc::close(file_desc) };
-            return Err(ret);
-        } else if second_copy != unsafe { first_copy.add(size) } {
-            unsafe { libc::close(file_desc) };
-            return Err(Error::new(ErrorKind::Other, "bad second address"));
-        }
-
-        // close the file descriptor
-        let ret = unsafe { libc::close(file_desc) };
-        if ret != 0 {
-            return Err(os_error("close failed"));
-        }
-
-        // unlink the shared memory
-        let ret = unsafe { libc::shm_unlink(name.as_ptr()) };
-        if ret != 0 {
-            return Err(os_error("shm_unlink failed"));
-        }
-
-        Ok(Buffer {
-            ptr: first_copy as *const u8,
-            size,
-            wrap,
-        })
+    #[inline(always)]
+    pub fn new(size: usize, wrap: usize) -> Result<Buffer, Error> {
+        os_create(size, wrap)
     }
 
     /// Returns the size of the circular buffer.
@@ -185,14 +224,6 @@ impl Buffer {
     #[inline(always)]
     pub unsafe fn slice_mut_unchecked(&mut self, start: usize, count: usize) -> &mut [u8] {
         slice::from_raw_parts_mut(self.ptr.add(start) as *mut u8, count)
-    }
-}
-
-impl Drop for Buffer {
-    fn drop(&mut self) {
-        let ptr = self.ptr as *mut libc::c_void;
-        let ret = unsafe { libc::munmap(ptr, 2 * self.size) };
-        assert_eq!(ret, 0);
     }
 }
 
