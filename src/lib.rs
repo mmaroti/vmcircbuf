@@ -163,7 +163,7 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
         ptr::null_mut(),
         PAGE_READWRITE,
         0,
-        size,
+        size as u32,
         name.as_ptr(),
     );
     if handle == ptr::null_mut() || handle == INVALID_HANDLE_VALUE {
