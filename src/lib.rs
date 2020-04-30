@@ -189,13 +189,29 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
         return ret;
     }
 
+    // map first copy
     let first_copy = MapViewOfFileEx(handle, FILE_MAP_WRITE, 0, 0, size, first_temp);
     if first_copy == ptr::null_mut() {
-        let ret = Err(os_error("MapViewOfFileEx failed"));
+        let ret = Err(os_error("first MapViewOfFileEx failed"));
         CloseHandle(handle);
         return ret;
     } else if first_copy != first_temp {
         let ret = Err(os_error("invalid first address"));
+        UnmapViewOfFile(first_copy);
+        CloseHandle(handle);
+        return ret;
+    }
+
+    // map second copy
+    let second_copy = MapViewOfFileEx(handle, FILE_MAP_WRITE, 0, 0, wrap, first_copy.add(size));
+    if second_copy == ptr::null_mut() {
+        let ret = Err(os_error("second MapViewOfFileEx failed"));
+        UnmapViewOfFile(first_copy);
+        CloseHandle(handle);
+        return ret;
+    } else if second_copy != first_copy.add(size) {
+        let ret = Err(os_error("invalid second address"));
+        UnmapViewOfFile(second_copy);
         UnmapViewOfFile(first_copy);
         CloseHandle(handle);
         return ret;
@@ -207,7 +223,11 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
         return Err(os_error("CloseHandle failed"));
     }
 
-    Err(Error::new(ErrorKind::Other, "not implemented"))
+    Ok(Buffer {
+        ptr: first_copy as *const u8,
+        size,
+        wrap,
+    })
 }
 
 impl Buffer {
