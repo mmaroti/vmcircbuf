@@ -148,7 +148,10 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
     use std::iter;
     use std::os::windows::ffi::OsStrExt;
     use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
-    use winapi::um::memoryapi::{CreateFileMappingW, VirtualAlloc, VirtualFree};
+    use winapi::um::memoryapi::{
+        CreateFileMappingW, MapViewOfFileEx, UnmapViewOfFile, VirtualAlloc, VirtualFree,
+        FILE_MAP_WRITE,
+    };
     use winapi::um::winnt::{MEM_RELEASE, MEM_RESERVE, PAGE_NOACCESS, PAGE_READWRITE};
 
     // encode name as WSTR
@@ -171,16 +174,31 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
     }
 
     // allocate virtual memory
-    let first_copy = VirtualAlloc(ptr::null_mut(), size + wrap, MEM_RESERVE, PAGE_NOACCESS);
-    if first_copy == ptr::null_mut() {
+    let first_temp = VirtualAlloc(ptr::null_mut(), size + wrap, MEM_RESERVE, PAGE_NOACCESS);
+    if first_temp == ptr::null_mut() {
+        let ret = Err(os_error("VirtualFree failed"));
         CloseHandle(handle);
-        return Err(os_error("VirtualAlloc failed"));
+        return ret;
     }
 
-    let ret = VirtualFree(first_copy, 0, MEM_RELEASE);
+    // and free it, we need the address only
+    let ret = VirtualFree(first_temp, 0, MEM_RELEASE);
     if ret == 0 {
+        let ret = Err(os_error("VirtualFree failed"));
         CloseHandle(handle);
-        return Err(os_error("VirtualFree failed"));
+        return ret;
+    }
+
+    let first_copy = MapViewOfFileEx(handle, FILE_MAP_WRITE, 0, 0, size, first_temp);
+    if first_copy == ptr::null_mut() {
+        let ret = Err(os_error("MapViewOfFileEx failed"));
+        CloseHandle(handle);
+        return ret;
+    } else if first_copy != first_temp {
+        let ret = Err(os_error("invalid first address"));
+        UnmapViewOfFile(first_copy);
+        CloseHandle(handle);
+        return ret;
     }
 
     // close handle
