@@ -58,7 +58,7 @@ impl Buffer {
             return Err(os_error("shm_open failed"));
         }
 
-        // first truncate the file to double size
+        // truncate the file to double size
         let ret = unsafe { libc::ftruncate(file_desc, 2 * size as libc::off_t) };
         if ret != 0 {
             let ret = os_error("first ftruncate failed");
@@ -108,18 +108,7 @@ impl Buffer {
             return Err(ret);
         } else if second_copy != unsafe { first_copy.add(size) } {
             unsafe { libc::close(file_desc) };
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                "incorrect second address",
-            ));
-        }
-
-        // second truncate the file to normal size
-        let ret = unsafe { libc::ftruncate(file_desc, size as libc::off_t) };
-        if ret != 0 {
-            let ret = os_error("second ftruncate failed");
-            unsafe { libc::close(file_desc) };
-            return Err(ret);
+            return Err(Error::new(ErrorKind::Other, "bad second address"));
         }
 
         // close the file descriptor
