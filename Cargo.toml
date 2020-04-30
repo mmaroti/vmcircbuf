@@ -15,4 +15,4 @@ keywords = ["mmap", "circbuf"]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["basetsd", "handleapi", "memoryapi", "minwindef", "std", "sysinfoapi"] }
+winapi = { version = "0.3", features = ["basetsd", "handleapi", "memoryapi", "std", "sysinfoapi"] }

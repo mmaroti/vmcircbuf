@@ -251,9 +251,10 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
 impl Drop for Buffer {
     fn drop(&mut self) {
         extern crate winapi;
+        use winapi::ctypes::c_void;
         use winapi::um::memoryapi::UnmapViewOfFile;
 
-        let ptr = self.ptr as *mut libc::c_void;
+        let ptr = self.ptr as *mut c_void;
         let ret = unsafe { UnmapViewOfFile(ptr) };
         debug_assert_ne!(ret, 0);
         let ret = unsafe { UnmapViewOfFile(ptr.add(self.size)) };
