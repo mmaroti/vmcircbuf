@@ -173,7 +173,7 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
     let mut err: Option<Error> = None;
 
     // create a paging file
-    let handle = CreateFileMappingW(
+    let mut handle = CreateFileMappingW(
         INVALID_HANDLE_VALUE,
         ptr::null_mut(),
         PAGE_READWRITE,
@@ -187,7 +187,7 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
     }
 
     // allocate virtual memory
-    let mut first_copy = ptr::null_mut();
+    let first_copy = ptr::null_mut();
     if err.is_none() {
         VirtualAlloc(ptr::null_mut(), size + wrap, MEM_RESERVE, PAGE_NOACCESS);
         if first_copy == ptr::null_mut() {
