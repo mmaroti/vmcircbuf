@@ -1,3 +1,6 @@
+// Copyright (C) 2020 Miklos Maroti
+// Licensed under the MIT license (see LICENSE)
+
 use std::io::{Error, ErrorKind};
 use std::ops::{Index, IndexMut};
 use std::slice::SliceIndex;

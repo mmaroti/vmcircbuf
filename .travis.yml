@@ -12,6 +12,7 @@ matrix:
       os: windows
     - env: TARGET=i686-pc-windows-msvc
       os: windows
+      rust: nightly
     - env: TARGET=x86_64-apple-darwin
       os: osx
     - env: TARGET=i686-apple-darwin
