@@ -144,12 +144,18 @@ unsafe fn os_page_size() -> Result<usize, Error> {
 #[cfg(windows)]
 unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Error> {
     extern crate winapi;
+    use std::ffi::OsStr;
+    use std::iter;
+    use std::os::windows::ffi::OsStrExt;
     use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
     use winapi::um::memoryapi::CreateFileMappingW;
     use winapi::um::winnt::PAGE_READWRITE;
 
     // encode name as WSTR
-    let name: Vec<u16> = OsStr::new(name).encode_wide().chain(once(0)).collect();
+    let name: Vec<u16> = OsStr::new(name)
+        .encode_wide()
+        .chain(iter::once(0))
+        .collect();
 
     // create a paging file
     let handle = CreateFileMappingA(
