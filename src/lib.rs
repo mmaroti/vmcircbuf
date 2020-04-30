@@ -6,14 +6,14 @@ use std::{cmp, process, ptr, slice};
 static BUFFER_ID: AtomicI32 = AtomicI32::new(0);
 
 /// A raw circular buffer of bytes. The buffer holds exactly `size` many
-/// bytes, and any at most `wrap` many bytes can be accessed as a continuos
-/// slice where the end wraps over to the beginning. This trick is performed
-/// with virtual memory, the same physical pages are mapped both at the start
-/// and after the end of the buffer.
+/// bytes but it is presented as a `size + wrap` length slice where the last
+/// `wrap` many bytes overlap with the first `wrap` many bytes of the slice.
+/// This magic trick is performed with virtual memory, the same physical pages
+/// are mapped both at the start and at the end of the buffer.
 pub struct Buffer {
     ptr: *const u8,
+    len: usize,
     size: usize,
-    wrap: usize,
 }
 
 fn os_error(message: &'static str) -> Error {
@@ -124,8 +124,8 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
         Some(err) => Err(err),
         None => Ok(Buffer {
             ptr: first_copy as *const u8,
+            len: size + wrap,
             size,
-            wrap,
         }),
     }
 }
@@ -136,7 +136,7 @@ impl Drop for Buffer {
         extern crate libc;
 
         let ptr = self.ptr as *mut libc::c_void;
-        let ret = unsafe { libc::munmap(ptr, self.size + self.wrap) };
+        let ret = unsafe { libc::munmap(ptr, self.len) };
         debug_assert_eq!(ret, 0);
     }
 }
@@ -241,8 +241,8 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
         Some(err) => Err(err),
         None => Ok(Buffer {
             ptr: first_copy as *const u8,
+            len: size + wrap,
             size,
-            wrap,
         }),
     }
 }
@@ -272,7 +272,7 @@ impl Buffer {
     /// Creates a new circular buffer with the given `size` and `wrap`. The
     /// returned `size` and `wrap` will be rounded up to an integer multiple
     /// of the page size. The `wrap` value cannot be larger than `size`, and
-    /// both can be zero to get the page size.
+    /// both can be zero to get exactly the page size.
     pub fn new(mut size: usize, mut wrap: usize) -> Result<Buffer, Error> {
         let page = Buffer::page_size()?;
 
@@ -281,7 +281,7 @@ impl Buffer {
         size = ((size + page - 1) / page) * page;
         wrap = cmp::max(wrap, page);
         wrap = ((wrap + page - 1) / page) * page;
-        if size + wrap > i32::max_value() as usize {
+        if wrap > size || size + wrap > i32::max_value() as usize {
             return Err(Error::new(ErrorKind::Other, "invalid sizes"));
         }
 
@@ -304,43 +304,23 @@ impl Buffer {
     /// Returns the wrap of the circular buffer.
     #[inline(always)]
     pub fn wrap(&self) -> usize {
-        self.wrap
+        self.len - self.size
     }
 
-    /// Returns an immutable slice of the circular buffer starting at `start`
-    /// and containing `count` many elements. Note, that `start + count`
-    /// cannot be larger than `size + wrap`. If `start + count` is bigger
-    /// than `size`, then the returned slice will magically wrap over
-    /// to the beginning of the buffer.
+    /// Returns an immutable slice of the circular buffer. The last `wrap`
+    /// many bytes are mapped to the first `wrap` many bytes, so you can
+    /// read the same content at both places.
     #[inline(always)]
-    pub fn slice(&self, start: usize, count: usize) -> &[u8] {
-        assert!(start + count <= self.size + self.wrap);
-        unsafe { self.slice_unchecked(start, count) }
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self.ptr, self.len) }
     }
 
-    /// This is the mutable analog of the `slice` method.
+    /// Returns a mutable slice of the circular buffer. The last `wrap`
+    /// many bytes are mapped to the first `wrap` many bytes, so you can
+    /// read and write the same content at both places.
     #[inline(always)]
-    pub fn slice_mut(&mut self, start: usize, count: usize) -> &mut [u8] {
-        assert!(start + count <= self.size + self.wrap);
-        unsafe { self.slice_mut_unchecked(start, count) }
-    }
-
-    /// This is the unsafe version of the `slice` method.
-    /// # Safety
-    /// Make sure that `start + count <= size + wrap` before
-    /// calling this method.
-    #[inline(always)]
-    pub unsafe fn slice_unchecked(&self, start: usize, count: usize) -> &[u8] {
-        slice::from_raw_parts(self.ptr.add(start), count)
-    }
-
-    /// This is the unsafe version of the `slice_mut` method.
-    /// # Safety
-    /// Make sure that `start + count <= size + wrap` before
-    /// calling this method.
-    #[inline(always)]
-    pub unsafe fn slice_mut_unchecked(&mut self, start: usize, count: usize) -> &mut [u8] {
-        slice::from_raw_parts_mut(self.ptr.add(start) as *mut u8, count)
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        unsafe { slice::from_raw_parts_mut(self.ptr as *mut u8, self.len) }
     }
 }
 
@@ -356,14 +336,32 @@ mod tests {
         let page = Buffer::page_size().unwrap();
         println!("page size: {}", page);
         let mut buffer = Buffer::new(2 * page, page).unwrap();
-        let size = buffer.size();
-        println!("buffer size: {}, wrap: {}", size, buffer.wrap());
+        println!("buffer size: {}, wrap: {}", buffer.size(), buffer.wrap());
 
-        for (i, a) in buffer.slice_mut(0, size).iter_mut().enumerate() {
-            *a = i as u8;
+        for (i, a) in buffer.as_mut_slice().iter_mut().enumerate() {
+            let b = i % 101;
+            *a = b as u8;
         }
-        for (i, a) in buffer.slice(10, size).iter().enumerate() {
-            assert_eq!(*a, ((i + 10) % size) as u8);
+
+        for (i, a) in buffer.as_slice().iter().take(buffer.wrap()).enumerate() {
+            let b = (i + buffer.size()) % 101;
+            assert_eq!(*a, b as u8);
         }
+    }
+
+    #[test]
+    fn simple() {
+        let mut buffer = Buffer::new(0, 0).unwrap();
+        let size = buffer.size();
+        let wrap = buffer.size();
+        let slice: &mut [u8] = buffer.as_mut_slice();
+        assert_eq!(slice.len(), size + wrap);
+
+        for a in slice.iter_mut() {
+            *a = 0;
+        }
+
+        slice[0] = 123;
+        assert_eq!(slice[size], 123);
     }
 }
