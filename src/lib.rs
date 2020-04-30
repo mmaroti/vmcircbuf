@@ -187,11 +187,11 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
     }
 
     // allocate virtual memory
-    let first_copy = ptr::null_mut();
+    let mut first_copy = ptr::null_mut();
     if err.is_none() {
-        VirtualAlloc(ptr::null_mut(), size + wrap, MEM_RESERVE, PAGE_NOACCESS);
+        first_copy = VirtualAlloc(ptr::null_mut(), size + wrap, MEM_RESERVE, PAGE_NOACCESS);
         if first_copy == ptr::null_mut() {
-            err = Some(os_error("VirtualFree failed"));
+            err = Some(os_error("VirtualAlloc failed"));
         }
     }
 
