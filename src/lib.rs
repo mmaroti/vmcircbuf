@@ -24,10 +24,10 @@ fn os_error(message: &'static str) -> Error {
 }
 
 #[cfg(unix)]
-fn os_page_size() -> Result<usize, Error> {
+unsafe fn os_page_size() -> Result<usize, Error> {
     extern crate libc;
 
-    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    let page = libc::sysconf(libc::_SC_PAGESIZE);
     if page <= 0 {
         Err(os_error("page_size failed"))
     } else {
@@ -36,77 +36,72 @@ fn os_page_size() -> Result<usize, Error> {
 }
 
 #[cfg(unix)]
-fn os_create(name: *const c_char, size: usize, wrap: usize) -> Result<Buffer, Error> {
+unsafe fn os_create(name: *const c_char, size: usize, wrap: usize) -> Result<Buffer, Error> {
     extern crate libc;
 
     // create temporary shared memory file
-    let file_desc =
-        unsafe { libc::shm_open(name, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL, 0o600) };
+    let file_desc = libc::shm_open(name, libc::O_RDWR | libc::O_CREAT | libc::O_EXCL, 0o600);
     if file_desc < 0 {
         return Err(os_error("shm_open failed"));
     }
 
     // truncate the file to size + wrap
-    let ret = unsafe { libc::ftruncate(file_desc, (size + wrap) as libc::off_t) };
+    let ret = libc::ftruncate(file_desc, (size + wrap) as libc::off_t);
     if ret != 0 {
         let ret = os_error("first ftruncate failed");
-        unsafe { libc::close(file_desc) };
+        libc::close(file_desc);
         return Err(ret);
     }
 
     // map with it fully
-    let first_copy = unsafe {
-        libc::mmap(
-            ptr::null_mut(),
-            size + wrap,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            file_desc,
-            0,
-        )
-    };
+    let first_copy = libc::mmap(
+        ptr::null_mut(),
+        size + wrap,
+        libc::PROT_READ | libc::PROT_WRITE,
+        libc::MAP_SHARED,
+        file_desc,
+        0,
+    );
     if first_copy == libc::MAP_FAILED {
         let ret = os_error("first mmap failed");
-        unsafe { libc::close(file_desc) };
+        libc::close(file_desc);
         return Err(ret);
     }
 
     // unmap the second wrap half
-    let ret = unsafe { libc::munmap(first_copy.add(size), wrap) };
+    let ret = libc::munmap(first_copy.add(size), wrap);
     if ret != 0 {
         let ret = os_error("munmap failed");
-        unsafe { libc::close(file_desc) };
+        libc::close(file_desc);
         return Err(ret);
     }
 
     // memory map the wrap part again
-    let second_copy = unsafe {
-        libc::mmap(
-            first_copy.add(size),
-            wrap,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            file_desc,
-            0,
-        )
-    };
+    let second_copy = libc::mmap(
+        first_copy.add(size),
+        wrap,
+        libc::PROT_READ | libc::PROT_WRITE,
+        libc::MAP_SHARED,
+        file_desc,
+        0,
+    );
     if second_copy == libc::MAP_FAILED {
         let ret = os_error("second mmap failed");
-        unsafe { libc::close(file_desc) };
+        libc::close(file_desc);
         return Err(ret);
-    } else if second_copy != unsafe { first_copy.add(size) } {
-        unsafe { libc::close(file_desc) };
+    } else if second_copy != first_copy.add(size) {
+        libc::close(file_desc);
         return Err(Error::new(ErrorKind::Other, "bad second address"));
     }
 
     // close the file descriptor
-    let ret = unsafe { libc::close(file_desc) };
+    let ret = libc::close(file_desc);
     if ret != 0 {
         return Err(os_error("close failed"));
     }
 
     // unlink the shared memory
-    let ret = unsafe { libc::shm_unlink(name) };
+    let ret = libc::shm_unlink(name);
     if ret != 0 {
         return Err(os_error("shm_unlink failed"));
     }
@@ -130,7 +125,7 @@ impl Drop for Buffer {
 }
 
 #[cfg(windows)]
-fn os_page_size() -> Result<usize, Error> {
+unsafe fn os_page_size() -> Result<usize, Error> {
     extern crate winapi;
     use std::mem;
     use winapi::um::sysinfoapi::GetSystemInfo;
@@ -141,10 +136,10 @@ fn os_page_size() -> Result<usize, Error> {
 }
 
 #[cfg(windows)]
-fn os_create(name: *const c_char, size: usize, wrap: usize) -> Result<Buffer, Error> {
+unsafe fn os_create(name: *const c_char, size: usize, wrap: usize) -> Result<Buffer, Error> {
     extern crate winapi;
     use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
-    use winapi::um::memoryapi::CreateFileMappingA;
+    use winapi::um::winbase::CreateFileMappingA;
     use winapi::um::winnt::PAGE_READWRITE;
 
     // create a paging file
@@ -156,7 +151,7 @@ fn os_create(name: *const c_char, size: usize, wrap: usize) -> Result<Buffer, Er
         size,
         name,
     );
-    if handle == ptr::null_mut() {
+    if handle == ptr::null_mut() || handle == INVALID_HANDLE_VALUE {
         return Err(os_error("CreateFileMappingA failed"));
     }
 
@@ -173,7 +168,7 @@ impl Buffer {
     /// Returns the page size of the underlying operating system.
     #[inline(always)]
     pub fn page_size() -> Result<usize, Error> {
-        os_page_size()
+        unsafe { os_page_size() }
     }
 
     /// Creates a new circular buffer with the given `size` and `wrap`. The
@@ -199,7 +194,7 @@ impl Buffer {
             BUFFER_ID.fetch_add(1, Ordering::Relaxed)
         ))?;
 
-        os_create(name.as_ptr(), size, wrap)
+        unsafe { os_create(name.as_ptr(), size, wrap) }
     }
 
     /// Returns the size of the circular buffer.
