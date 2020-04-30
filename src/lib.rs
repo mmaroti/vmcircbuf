@@ -1,4 +1,3 @@
-use std::ffi::CString;
 use std::io::{Error, ErrorKind};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::{cmp, process, ptr, slice};
@@ -37,6 +36,7 @@ unsafe fn os_page_size() -> Result<usize, Error> {
 #[cfg(unix)]
 unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Error> {
     extern crate libc;
+    use std::ffi::CString;
 
     // convert name to c-string
     let name = CString::new(name)?;
@@ -158,7 +158,7 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
         .collect();
 
     // create a paging file
-    let handle = CreateFileMappingA(
+    let handle = CreateFileMappingW(
         INVALID_HANDLE_VALUE,
         ptr::null_mut(),
         PAGE_READWRITE,
