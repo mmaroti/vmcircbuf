@@ -9,7 +9,7 @@ static BUFFER_ID: AtomicI32 = AtomicI32::new(0);
 
 /// A raw circular buffer of bytes.
 pub struct Buffer {
-    ptr: *mut libc::c_void,
+    ptr: *const u8,
     size: usize,
 }
 
@@ -29,11 +29,11 @@ impl Buffer {
     pub fn new(mut size: usize) -> Result<Buffer, Error> {
         let page = Buffer::page_size()?;
 
-        // round up to a multiple of the minimum size, be safe
+        // round up to a multiple of the page size, be safe
         size = cmp::max(size, page);
         size = ((size + page - 1) / page) * page;
         if size > (i32::max_value() / 2) as usize {
-            return Err(Error::new(ErrorKind::InvalidInput, "invalid length"));
+            return Err(Error::new(ErrorKind::InvalidInput, "invalid size"));
         }
 
         // create temporary shared memory file
@@ -119,12 +119,13 @@ impl Buffer {
         }
 
         Ok(Buffer {
-            ptr: first_copy,
+            ptr: first_copy as *const u8,
             size,
         })
     }
 
     /// Returns the size of the circular buffer.
+    #[inline(always)]
     pub fn size(&self) -> usize {
         self.size
     }
@@ -134,24 +135,42 @@ impl Buffer {
     /// parameters must be less than or equal to the `size` of the buffer.
     /// If `start + count` is bigger than `size`, then the returned slice
     /// will magically wrap over to the beginning.
+    #[inline(always)]
     pub fn slice(&self, start: usize, count: usize) -> &[u8] {
         assert!(start <= self.size && count <= self.size);
-        unsafe { slice::from_raw_parts(self.ptr.add(start) as *const u8, count) }
+        unsafe { self.slice_unchecked(start, count) }
     }
 
     /// This is the mutable analog of the `slice` method.
+    #[inline(always)]
     pub fn slice_mut(&mut self, start: usize, count: usize) -> &mut [u8] {
         assert!(start <= self.size && count <= self.size);
-        unsafe { slice::from_raw_parts_mut(self.ptr.add(start) as *mut u8, count) }
+        unsafe { self.slice_mut_unchecked(start, count) }
+    }
+
+    /// This is the unsafe version of the `slice` method.
+    #[inline(always)]
+    pub unsafe fn slice_unchecked(&self, start: usize, count: usize) -> &[u8] {
+        slice::from_raw_parts(self.ptr.add(start), count)
+    }
+
+    /// This is the unsafe version of the `slice_mut` method.
+    #[inline(always)]
+    pub unsafe fn slice_mut_unchecked(&mut self, start: usize, count: usize) -> &mut [u8] {
+        slice::from_raw_parts_mut(self.ptr.add(start) as *mut u8, count)
     }
 }
 
 impl Drop for Buffer {
     fn drop(&mut self) {
-        let ret = unsafe { libc::munmap(self.ptr, 2 * self.size) };
+        let ptr = self.ptr as *mut libc::c_void;
+        let ret = unsafe { libc::munmap(ptr, 2 * self.size) };
         assert_eq!(ret, 0);
     }
 }
+
+unsafe impl Send for Buffer {}
+unsafe impl Sync for Buffer {}
 
 #[cfg(test)]
 mod tests {
