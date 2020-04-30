@@ -142,6 +142,30 @@ fn os_page_size() -> Result<usize, Error> {
 
 #[cfg(windows)]
 fn os_create(name: *const c_char, size: usize, wrap: usize) -> Result<Buffer, Error> {
+    extern crate winapi;
+    use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
+    use winapi::um::memoryapi::CreateFileMappingA;
+    use winapi::um::winnt::PAGE_READWRITE;
+
+    // create a paging file
+    let handle = CreateFileMappingA(
+        INVALID_HANDLE_VALUE,
+        ptr::null_mut(),
+        PAGE_READWRITE,
+        0,
+        size,
+        name,
+    );
+    if handle == ptr::null_mut() {
+        return Err(os_error("CreateFileMappingA failed"));
+    }
+
+    // close handle
+    let ret = CloseHandle(handle);
+    if ret == 0 {
+        return Err(os_error("CloseHandle failed"));
+    }
+
     Err(Error::new(ErrorKind::Other, "not implemented"))
 }
 
@@ -164,7 +188,7 @@ impl Buffer {
         size = ((size + page - 1) / page) * page;
         wrap = cmp::max(wrap, page);
         wrap = ((wrap + page - 1) / page) * page;
-        if size + wrap > libc::off_t::max_value() as usize {
+        if size + wrap > i32::max_value() as usize {
             return Err(Error::new(ErrorKind::Other, "invalid sizes"));
         }
 
