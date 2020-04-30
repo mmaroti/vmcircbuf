@@ -43,7 +43,7 @@ impl Buffer {
 
         // create temporary shared memory file
         let name = CString::new(format!(
-            "rust-vmcircbuf-{}-{}",
+            "/rust-vmcircbuf-{}-{}",
             process::id(),
             BUFFER_ID.fetch_add(1, Ordering::Relaxed)
         ))?;
@@ -183,9 +183,10 @@ mod tests {
 
     #[test]
     fn it_works() {
+        println!("page size: {}", Buffer::page_size().unwrap());
         let mut buffer = Buffer::new(0).unwrap();
         let size = buffer.size();
-        println!("buffer length: {}", size);
+        println!("buffer size: {}", size);
         for (i, a) in buffer.slice_mut(0, size).iter_mut().enumerate() {
             *a = i as u8;
         }
