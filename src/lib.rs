@@ -149,7 +149,12 @@ unsafe fn os_page_size() -> Result<usize, Error> {
 
     let mut info = mem::zeroed();
     GetSystemInfo(&mut info);
-    Ok(info.dwAllocationGranularity as usize)
+    let page = info.dwAllocationGranularity as usize;
+    if page <= 0 {
+        Err(Error::new(ErrorKind::Other, "invalid page size"))
+    } else {
+        Ok(page)
+    }
 }
 
 #[cfg(windows)]
@@ -353,7 +358,7 @@ mod tests {
     fn simple() {
         let mut buffer = Buffer::new(0, 0).unwrap();
         let size = buffer.size();
-        let wrap = buffer.size();
+        let wrap = buffer.wrap();
         let slice: &mut [u8] = buffer.as_mut_slice();
         assert_eq!(slice.len(), size + wrap);
 

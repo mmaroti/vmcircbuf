@@ -15,7 +15,7 @@ Windows, iOS, Android, Raspberry PI and MIPS.
 ```
 let mut buffer = Buffer::new(0, 0).unwrap();
 let size = buffer.size();
-let wrap = buffer.size();
+let wrap = buffer.wrap();
 let slice: &mut [u8] = buffer.as_mut_slice();
 assert_eq!(slice.len(), size + wrap);
 
