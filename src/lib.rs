@@ -40,6 +40,7 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
 
     // convert name to c-string
     let name = CString::new(name)?;
+    let mut err: Option<Error> = None;
 
     // create temporary shared memory file
     let file_desc = libc::shm_open(
@@ -48,75 +49,85 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
         0o600,
     );
     if file_desc < 0 {
-        return Err(os_error("shm_open failed"));
+        err = Some(os_error("shm_open failed"));
     }
 
     // truncate the file to size + wrap
-    let ret = libc::ftruncate(file_desc, (size + wrap) as libc::off_t);
-    if ret != 0 {
-        let ret = os_error("first ftruncate failed");
-        libc::close(file_desc);
-        return Err(ret);
+    if err.is_none() {
+        let ret = libc::ftruncate(file_desc, (size + wrap) as libc::off_t);
+        if ret != 0 {
+            err = Some(os_error("first ftruncate failed"));
+        }
     }
 
-    // map with it fully
-    let first_copy = libc::mmap(
-        ptr::null_mut(),
-        size + wrap,
-        libc::PROT_READ | libc::PROT_WRITE,
-        libc::MAP_SHARED,
-        file_desc,
-        0,
-    );
-    if first_copy == libc::MAP_FAILED {
-        let ret = os_error("first mmap failed");
-        libc::close(file_desc);
-        return Err(ret);
+    // map it fully
+    let mut first_copy = libc::MAP_FAILED;
+    if err.is_none() {
+        first_copy = libc::mmap(
+            ptr::null_mut(),
+            size + wrap,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            file_desc,
+            0,
+        );
+        if first_copy == libc::MAP_FAILED {
+            err = Some(os_error("first mmap failed"));
+        }
     }
 
-    // unmap the second wrap half
-    let ret = libc::munmap(first_copy.add(size), wrap);
-    if ret != 0 {
-        let ret = os_error("munmap failed");
-        libc::close(file_desc);
-        return Err(ret);
+    // unmap the wrap part
+    if err.is_none() {
+        let ret = libc::munmap(first_copy.add(size), wrap);
+        if ret != 0 {
+            err = Some(os_error("munmap failed"));
+        }
     }
 
     // memory map the wrap part again
-    let second_copy = libc::mmap(
-        first_copy.add(size),
-        wrap,
-        libc::PROT_READ | libc::PROT_WRITE,
-        libc::MAP_SHARED,
-        file_desc,
-        0,
-    );
-    if second_copy == libc::MAP_FAILED {
-        let ret = os_error("second mmap failed");
-        libc::close(file_desc);
-        return Err(ret);
-    } else if second_copy != first_copy.add(size) {
-        libc::close(file_desc);
-        return Err(Error::new(ErrorKind::Other, "bad second address"));
+    if err.is_none() {
+        let second_copy = libc::mmap(
+            first_copy.add(size),
+            wrap,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            file_desc,
+            0,
+        );
+        if second_copy == libc::MAP_FAILED {
+            err = Some(os_error("second mmap failed"));
+        } else if second_copy != first_copy.add(size) {
+            err = Some(Error::new(ErrorKind::Other, "bad second address"));
+        }
     }
 
-    // close the file descriptor
-    let ret = libc::close(file_desc);
-    if ret != 0 {
-        return Err(os_error("close failed"));
+    // unmap memory if error
+    if err.is_some() && first_copy != libc::MAP_FAILED {
+        libc::munmap(first_copy, size + wrap);
     }
 
-    // unlink the shared memory
-    let ret = libc::shm_unlink(name.as_ptr());
-    if ret != 0 {
-        return Err(os_error("shm_unlink failed"));
+    if file_desc >= 0 {
+        // close the file descriptor
+        let ret = libc::close(file_desc);
+        if ret != 0 && err.is_none() {
+            err = Some(os_error("close failed"));
+        }
+
+        // unlink the shared memory
+        let ret = libc::shm_unlink(name.as_ptr());
+        if ret != 0 && err.is_none() {
+            err = Some(os_error("shm_unlink failed"));
+        }
     }
 
-    Ok(Buffer {
-        ptr: first_copy as *const u8,
-        size,
-        wrap,
-    })
+    match err {
+        Some(err) => Err(err),
+        None => Ok(Buffer {
+            ptr: first_copy as *const u8,
+            size,
+            wrap,
+        }),
+    }
 }
 
 #[cfg(unix)]
@@ -125,8 +136,8 @@ impl Drop for Buffer {
         extern crate libc;
 
         let ptr = self.ptr as *mut libc::c_void;
-        let ret = unsafe { libc::munmap(ptr, 2 * self.size) };
-        assert_eq!(ret, 0);
+        let ret = unsafe { libc::munmap(ptr, self.size + self.wrap) };
+        debug_assert_eq!(ret, 0);
     }
 }
 
@@ -159,6 +170,7 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
         .encode_wide()
         .chain(iter::once(0))
         .collect();
+    let mut err: Option<Error> = None;
 
     // create a paging file
     let handle = CreateFileMappingW(
@@ -170,64 +182,83 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
         name.as_ptr(),
     );
     if handle == ptr::null_mut() || handle == INVALID_HANDLE_VALUE {
-        return Err(os_error("CreateFileMappingA failed"));
+        err = Some(os_error("CreateFileMappingA failed"));
+        handle = ptr::null_mut();
     }
 
     // allocate virtual memory
-    let first_temp = VirtualAlloc(ptr::null_mut(), size + wrap, MEM_RESERVE, PAGE_NOACCESS);
-    if first_temp == ptr::null_mut() {
-        let ret = Err(os_error("VirtualFree failed"));
-        CloseHandle(handle);
-        return ret;
+    let mut first_copy = ptr::null_mut();
+    if err.is_none() {
+        VirtualAlloc(ptr::null_mut(), size + wrap, MEM_RESERVE, PAGE_NOACCESS);
+        if first_copy == ptr::null_mut() {
+            err = Some(os_error("VirtualFree failed"));
+        }
     }
 
     // and free it, we need the address only
-    let ret = VirtualFree(first_temp, 0, MEM_RELEASE);
-    if ret == 0 {
-        let ret = Err(os_error("VirtualFree failed"));
-        CloseHandle(handle);
-        return ret;
+    if err.is_none() {
+        let ret = VirtualFree(first_copy, 0, MEM_RELEASE);
+        if ret == 0 {
+            err = Some(os_error("VirtualFree failed"));
+        }
     }
 
     // map first copy
-    let first_copy = MapViewOfFileEx(handle, FILE_MAP_WRITE, 0, 0, size, first_temp);
-    if first_copy == ptr::null_mut() {
-        let ret = Err(os_error("first MapViewOfFileEx failed"));
-        CloseHandle(handle);
-        return ret;
-    } else if first_copy != first_temp {
-        let ret = Err(os_error("invalid first address"));
-        UnmapViewOfFile(first_copy);
-        CloseHandle(handle);
-        return ret;
+    if err.is_none() {
+        let first_temp = MapViewOfFileEx(handle, FILE_MAP_WRITE, 0, 0, size, first_copy);
+        if first_temp == ptr::null_mut() {
+            err = Some(os_error("first MapViewOfFileEx failed"));
+        } else if first_temp != first_copy {
+            err = Some(os_error("invalid first address"));
+        }
     }
 
     // map second copy
-    let second_copy = MapViewOfFileEx(handle, FILE_MAP_WRITE, 0, 0, wrap, first_copy.add(size));
-    if second_copy == ptr::null_mut() {
-        let ret = Err(os_error("second MapViewOfFileEx failed"));
+    if err.is_none() {
+        let second_copy = MapViewOfFileEx(handle, FILE_MAP_WRITE, 0, 0, wrap, first_copy.add(size));
+        if second_copy == ptr::null_mut() {
+            err = Some(os_error("second MapViewOfFileEx failed"));
+        } else if second_copy != first_copy.add(size) {
+            err = Some(os_error("invalid second address"));
+        }
+    }
+
+    // unmap memory on error
+    if err.is_some() && first_copy != ptr::null_mut() {
         UnmapViewOfFile(first_copy);
-        CloseHandle(handle);
-        return ret;
-    } else if second_copy != first_copy.add(size) {
-        let ret = Err(os_error("invalid second address"));
-        UnmapViewOfFile(second_copy);
-        UnmapViewOfFile(first_copy);
-        CloseHandle(handle);
-        return ret;
+        UnmapViewOfFile(first_copy.add(size));
     }
 
     // close handle
-    let ret = CloseHandle(handle);
-    if ret == 0 {
-        return Err(os_error("CloseHandle failed"));
+    if handle != ptr::null_mut() {
+        let ret = CloseHandle(handle);
+        if ret == 0 && err.is_none() {
+            err = Some(os_error("CloseHandle failed"));
+        }
     }
 
-    Ok(Buffer {
-        ptr: first_copy as *const u8,
-        size,
-        wrap,
-    })
+    match err {
+        Some(err) => Err(err),
+        None => Ok(Buffer {
+            ptr: first_copy as *const u8,
+            size,
+            wrap,
+        }),
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        extern crate winapi;
+        use winapi::um::memoryapi::UnmapViewOfFile;
+
+        let ptr = self.ptr as *mut libc::c_void;
+        let ret = unsafe { UnmapViewOfFile(ptr) };
+        debug_assert_ne!(ret, 0);
+        let ret = unsafe { UnmapViewOfFile(ptr.add(self.size)) };
+        debug_assert_ne!(ret, 0);
+    }
 }
 
 impl Buffer {
