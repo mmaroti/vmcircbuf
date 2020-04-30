@@ -2,6 +2,7 @@ vmcircbuf
 =========
 [![Build Status](https://travis-ci.org/mmaroti/vmcircbuf.svg?branch=master)](https://travis-ci.org/mmaroti/vmcircbuf)
 [![Crate](https://img.shields.io/crates/v/vmcircbuf)](https://crates.io/crates/vmcircbuf)
+[![Documentation](https://docs.rs/vmcircbuf/badge.svg)](https://docs.rs/vmcircbuf)
 [![GitHub](https://img.shields.io/github/license/mmaroti/vmcircbuf)](LICENSE)
 
 This is a simple crate to create a circular buffer that magically wraps around
