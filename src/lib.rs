@@ -13,12 +13,17 @@ pub struct Buffer {
     size: usize,
 }
 
+fn os_error(message: &'static str) -> Error {
+    let kind = Error::last_os_error().kind();
+    Error::new(kind, message)
+}
+
 impl Buffer {
     /// Returns the page size of the underlying operating system.
     pub fn page_size() -> Result<usize, Error> {
         let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
         if page <= 0 {
-            Err(Error::last_os_error())
+            Err(os_error("page_size failed"))
         } else {
             Ok(page as usize)
         }
@@ -33,7 +38,7 @@ impl Buffer {
         size = cmp::max(size, page);
         size = ((size + page - 1) / page) * page;
         if size > (i32::max_value() / 2) as usize {
-            return Err(Error::new(ErrorKind::InvalidInput, "invalid size"));
+            return Err(Error::new(ErrorKind::Other, "invalid size"));
         }
 
         // create temporary shared memory file
@@ -50,13 +55,13 @@ impl Buffer {
             )
         };
         if file_desc < 0 {
-            return Err(Error::last_os_error());
+            return Err(os_error("shm_open failed"));
         }
 
         // resize the file to length
         let ret = unsafe { libc::ftruncate(file_desc, size as libc::off_t) };
         if ret != 0 {
-            let ret = Error::last_os_error();
+            let ret = os_error("ftruncate failed");
             unsafe { libc::close(file_desc) };
             return Err(ret);
         }
@@ -73,7 +78,7 @@ impl Buffer {
             )
         };
         if first_copy == libc::MAP_FAILED {
-            let ret = Error::last_os_error();
+            let ret = os_error("first mmap failed");
             unsafe { libc::close(file_desc) };
             return Err(ret);
         }
@@ -81,7 +86,7 @@ impl Buffer {
         // unmap the second half
         let ret = unsafe { libc::munmap(first_copy.add(size), size) };
         if ret != 0 {
-            let ret = Error::last_os_error();
+            let ret = os_error("munmap failed");
             unsafe { libc::close(file_desc) };
             return Err(ret);
         }
@@ -98,7 +103,7 @@ impl Buffer {
             )
         };
         if second_copy == libc::MAP_FAILED {
-            let ret = Error::last_os_error();
+            let ret = os_error("second mmap failed");
             unsafe { libc::close(file_desc) };
             return Err(ret);
         } else if second_copy != unsafe { first_copy.add(size) } {
@@ -109,13 +114,13 @@ impl Buffer {
         // close the file descriptor
         let ret = unsafe { libc::close(file_desc) };
         if ret != 0 {
-            return Err(Error::last_os_error());
+            return Err(os_error("close failed"));
         }
 
         // unlink the shared memory
         let ret = unsafe { libc::shm_unlink(name.as_ptr()) };
         if ret != 0 {
-            return Err(Error::last_os_error());
+            return Err(os_error("shm_unlink failed"));
         }
 
         Ok(Buffer {
