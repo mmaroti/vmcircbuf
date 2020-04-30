@@ -6,7 +6,8 @@ vmcircbuf
 
 This is a simple crate to create a circular buffer that magically wraps around
 without any copying. This is achieved by mapping the same physical memory pages 
-twice into the virtual address space.
+twice into the virtual address space. This crate is working on Linux, OSX, 
+Windows, Android, Raspberry PI, MIPS.
 
 ```
 let mut buffer = Buffer::new(0, 0).unwrap();
