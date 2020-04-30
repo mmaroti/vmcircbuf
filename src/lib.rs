@@ -152,10 +152,10 @@ impl Buffer {
     }
 
     /// Returns an immutable slice of the circular buffer starting at `start`
-    /// and containing `count` many elements. The `start` and `count`
-    /// parameters cannot be larger than `size` and `wrap`, respectively.
-    /// If `start + count` is bigger than `size + wrap`, then the returned
-    /// slice will magically wrap over to the beginning.
+    /// and containing `count` many elements. Note, that `start + count`
+    /// cannot be larger than `size + wrap`. If `start + count` is bigger
+    /// than `size`, then the returned slice will magically wrap over
+    /// to the beginning of the buffer.
     #[inline(always)]
     pub fn slice(&self, start: usize, count: usize) -> &[u8] {
         assert!(start + count <= self.size + self.wrap);
@@ -214,8 +214,8 @@ mod tests {
         for (i, a) in buffer.slice_mut(0, size).iter_mut().enumerate() {
             *a = i as u8;
         }
-        for (i, a) in buffer.slice(1, size).iter().enumerate() {
-            assert_eq!(*a, ((i + 1) % size) as u8);
+        for (i, a) in buffer.slice(10, size).iter().enumerate() {
+            assert_eq!(*a, ((i + 10) % size) as u8);
         }
     }
 }
