@@ -9,6 +9,7 @@ repository = "https://github.com/mmaroti/vmcircbuf/"
 documentation = "https://docs.rs/vmcircbuf/"
 edition = "2018"
 keywords = ["mmap", "circbuf", "buffer", "ring", "circular"]
+categories = ["data-structures"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
