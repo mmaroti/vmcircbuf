@@ -1,4 +1,6 @@
 use std::io::{Error, ErrorKind};
+use std::ops::{Index, IndexMut};
+use std::slice::SliceIndex;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::{cmp, process, ptr, slice};
 
@@ -283,7 +285,7 @@ impl Drop for Buffer {
 
 impl Buffer {
     /// Returns the page size of the underlying operating system.
-    #[inline(always)]
+    #[inline]
     pub fn page_size() -> Result<usize, Error> {
         unsafe { os_page_size() }
     }
@@ -315,13 +317,13 @@ impl Buffer {
     }
 
     /// Returns the size of the circular buffer.
-    #[inline(always)]
+    #[inline]
     pub fn size(&self) -> usize {
         self.size
     }
 
     /// Returns the wrap of the circular buffer.
-    #[inline(always)]
+    #[inline]
     pub fn wrap(&self) -> usize {
         self.len - self.size
     }
@@ -329,7 +331,7 @@ impl Buffer {
     /// Returns an immutable slice of the circular buffer. The last `wrap`
     /// many bytes are mapped to the first `wrap` many bytes, so you can
     /// read the same content at both places.
-    #[inline(always)]
+    #[inline]
     pub fn as_slice(&self) -> &[u8] {
         unsafe { slice::from_raw_parts(self.ptr, self.len) }
     }
@@ -337,7 +339,7 @@ impl Buffer {
     /// Returns a mutable slice of the circular buffer. The last `wrap`
     /// many bytes are mapped to the first `wrap` many bytes, so you can
     /// read and write the same content at both places.
-    #[inline(always)]
+    #[inline]
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { slice::from_raw_parts_mut(self.ptr as *mut u8, self.len) }
     }
@@ -345,6 +347,22 @@ impl Buffer {
 
 unsafe impl Send for Buffer {}
 unsafe impl Sync for Buffer {}
+
+impl<I: SliceIndex<[u8]>> Index<I> for Buffer {
+    type Output = I::Output;
+
+    #[inline]
+    fn index(&self, index: I) -> &Self::Output {
+        self.as_slice().index(index)
+    }
+}
+
+impl<I: SliceIndex<[u8]>> IndexMut<I> for Buffer {
+    #[inline]
+    fn index_mut(&mut self, index: I) -> &mut Self::Output {
+        self.as_mut_slice().index_mut(index)
+    }
+}
 
 #[cfg(test)]
 mod tests {
