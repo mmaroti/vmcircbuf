@@ -209,7 +209,7 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
 
     // and free it, we need the address only
     if err.is_none() {
-        let ret = VirtualFree(first_copy, (size + wrap) as SIZE_T, MEM_RELEASE);
+        let ret = VirtualFree(first_copy, 0 as SIZE_T, MEM_RELEASE);
         if ret == 0 {
             err = Some(os_error("VirtualFree failed"));
         }
