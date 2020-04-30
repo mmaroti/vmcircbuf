@@ -11,7 +11,7 @@ static BUFFER_ID: AtomicI32 = AtomicI32::new(0);
 /// bytes, and any at most `wrap` many bytes can be accessed as a continuos
 /// slice where the end wraps over to the beginning. This trick is performed
 /// with virtual memory, the same physical pages are mapped both at the start
-/// of an buffer and after the end of the buffer.
+/// and after the end of the buffer.
 pub struct Buffer {
     ptr: *const u8,
     size: usize,

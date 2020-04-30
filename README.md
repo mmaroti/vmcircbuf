@@ -1,10 +1,11 @@
 vmcircbuf
 =========
 [![Build Status](https://travis-ci.org/mmaroti/vmcircbuf.svg?branch=master)](https://travis-ci.org/mmaroti/vmcircbuf)
-![GitHub](https://img.shields.io/github/license/mmaroti/vmcircbuf)
+[![Crate](https://img.shields.io/crates/v/vmcircbuf)](https://crates.io/crates/vmcircbuf)
+[![GitHub](https://img.shields.io/github/license/mmaroti/vmcircbuf)](LICENSE)
 
 This is a simple crate to create a circular buffer that magically wraps around
-without any copying. This is achieved by mapping the same physical memory page 
+without any copying. This is achieved by mapping the same physical memory pages 
 twice into the virtual address space.
 
 ```

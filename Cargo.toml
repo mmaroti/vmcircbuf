@@ -1,7 +1,8 @@
 [package]
 name = "vmcircbuf"
 description = "A circular buffer that magically wraps around without any copying"
-version = "0.1.0"
+readme = "README.md"
+version = "0.1.1"
 license = "MIT"
 authors = ["Miklos Maroti <mmaroti@gmail.com>"]
 repository = "https://github.com/mmaroti/vmcircbuf/"
