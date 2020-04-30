@@ -148,7 +148,7 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
     use std::iter;
     use std::os::windows::ffi::OsStrExt;
     use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
-    use winapi::um::memoryapi::{CreateFileMappingW, VirtualAlloc};
+    use winapi::um::memoryapi::{CreateFileMappingW, VirtualAlloc, VirtualFree};
     use winapi::um::winnt::{MEM_RELEASE, MEM_RESERVE, PAGE_NOACCESS, PAGE_READWRITE};
 
     // encode name as WSTR
@@ -171,14 +171,14 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
     }
 
     // allocate virtual memory
-    let first_copy = VirtualAlloc(ptr::null(), size + wrap, MEM_RESERVE, PAGE_NOACCESS);
-    if first_copy == ptr::null() {
+    let first_copy = VirtualAlloc(ptr::null_mut(), size + wrap, MEM_RESERVE, PAGE_NOACCESS);
+    if first_copy == ptr::null_mut() {
         CloseHandle(handle);
         return Err(os_error("VirtualAlloc failed"));
     }
 
     let ret = VirtualFree(first_copy, 0, MEM_RELEASE);
-    if (ret == 0) {
+    if ret == 0 {
         CloseHandle(handle);
         return Err(os_error("VirtualFree failed"));
     }
