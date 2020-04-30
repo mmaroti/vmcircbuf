@@ -37,7 +37,7 @@ impl Buffer {
         // round up to a multiple of the page size, be safe
         size = cmp::max(size, page);
         size = ((size + page - 1) / page) * page;
-        if size > (i32::max_value() / 2) as usize {
+        if size > (libc::off_t::max_value() / 2) as usize {
             return Err(Error::new(ErrorKind::Other, "invalid size"));
         }
 
@@ -58,10 +58,10 @@ impl Buffer {
             return Err(os_error("shm_open failed"));
         }
 
-        // resize the file to double size
+        // first truncate the file to double size
         let ret = unsafe { libc::ftruncate(file_desc, 2 * size as libc::off_t) };
         if ret != 0 {
-            let ret = os_error("ftruncate failed");
+            let ret = os_error("first ftruncate failed");
             unsafe { libc::close(file_desc) };
             return Err(ret);
         }
@@ -108,7 +108,18 @@ impl Buffer {
             return Err(ret);
         } else if second_copy != unsafe { first_copy.add(size) } {
             unsafe { libc::close(file_desc) };
-            return Err(Error::new(ErrorKind::InvalidData, "second mmap"));
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "incorrect second address",
+            ));
+        }
+
+        // second truncate the file to normal size
+        let ret = unsafe { libc::ftruncate(file_desc, size as libc::off_t) };
+        if ret != 0 {
+            let ret = os_error("second ftruncate failed");
+            unsafe { libc::close(file_desc) };
+            return Err(ret);
         }
 
         // close the file descriptor
