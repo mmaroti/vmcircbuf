@@ -19,6 +19,8 @@ pub struct Buffer {
     ptr: *const u8,
     len: usize,
     size: usize,
+    #[cfg(windows)]
+    handle: *const std::ffi::c_void,
 }
 
 fn os_error(message: &'static str) -> Error {
@@ -39,7 +41,7 @@ unsafe fn vm_page_size() -> Result<usize, Error> {
 }
 
 #[cfg(unix)]
-unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<*const u8, Error> {
+unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Error> {
     extern crate libc;
     use std::ffi::CString;
 
@@ -127,7 +129,11 @@ unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<*const u8, E
 
     match err {
         Some(err) => Err(err),
-        None => Ok(first_copy as *const u8),
+        None => Ok(Buffer {
+            ptr: first_copy as *const u8,
+            len: size + wrap,
+            size,
+        }),
     }
 }
 
@@ -166,7 +172,7 @@ unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<*const u8, E
     use std::os::windows::ffi::OsStrExt;
     use winapi::shared::basetsd::SIZE_T;
     use winapi::shared::minwindef::DWORD;
-    use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
+    use winapi::um::handleapi::INVALID_HANDLE_VALUE;
     use winapi::um::memoryapi::{
         CreateFileMappingW, MapViewOfFileEx, UnmapViewOfFile, VirtualAlloc, VirtualFree,
         FILE_MAP_WRITE,
@@ -181,17 +187,17 @@ unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<*const u8, E
     let mut err: Option<Error> = None;
 
     // create a paging file
+    debug_assert!(size <= u32::max_value as usize);
     let mut handle = CreateFileMappingW(
         INVALID_HANDLE_VALUE,
         ptr::null_mut(),
         PAGE_READWRITE,
-        (size >> 32) as DWORD,
+        0 as DWORD,
         size as DWORD,
         name.as_ptr(),
     );
     if handle == ptr::null_mut() || handle == INVALID_HANDLE_VALUE {
-        err = Some(os_error("CreateFileMappingA failed"));
-        handle = ptr::null_mut();
+        err = Some(os_error("CreateFileMappingW failed"));
     }
 
     // allocate virtual memory
@@ -218,7 +224,14 @@ unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<*const u8, E
 
     // map first copy
     if err.is_none() {
-        let first_temp = MapViewOfFileEx(handle, FILE_MAP_WRITE, 0, 0, size as SIZE_T, first_copy);
+        let first_temp = MapViewOfFileEx(
+            handle,
+            FILE_MAP_WRITE,
+            0 as DWORD,
+            0 as DWORD,
+            size as SIZE_T,
+            first_copy,
+        );
         if first_temp == ptr::null_mut() {
             err = Some(os_error("first MapViewOfFileEx failed"));
         } else if first_temp != first_copy {
@@ -231,8 +244,8 @@ unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<*const u8, E
         let second_copy = MapViewOfFileEx(
             handle,
             FILE_MAP_WRITE,
-            0,
-            0,
+            0 as DWORD,
+            0 as DWORD,
             wrap as SIZE_T,
             first_copy.add(size),
         );
@@ -249,17 +262,14 @@ unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<*const u8, E
         UnmapViewOfFile(first_copy.add(size));
     }
 
-    // close handle
-    if handle != ptr::null_mut() {
-        let ret = CloseHandle(handle);
-        if ret == 0 && err.is_none() {
-            err = Some(os_error("CloseHandle failed"));
-        }
-    }
-
     match err {
         Some(err) => Err(err),
-        None => Ok(first_copy as *const u8),
+        None => Ok(Buffer {
+            ptr: first_copy as *const u8,
+            len: size + wrap,
+            size,
+            handle: handle as *const std::ffi::c_void,
+        }),
     }
 }
 
@@ -268,12 +278,17 @@ impl Drop for Buffer {
     fn drop(&mut self) {
         extern crate winapi;
         use winapi::ctypes::c_void;
+        use winapi::um::handleapi::CloseHandle;
         use winapi::um::memoryapi::UnmapViewOfFile;
 
         let ptr = self.ptr as *mut c_void;
         let ret = unsafe { UnmapViewOfFile(ptr) };
         debug_assert_ne!(ret, 0);
         let ret = unsafe { UnmapViewOfFile(ptr.add(self.size)) };
+        debug_assert_ne!(ret, 0);
+
+        let handle = self.handle as *mut c_void;
+        let ret = CloseHandle(handle);
         debug_assert_ne!(ret, 0);
     }
 }
@@ -308,14 +323,7 @@ impl Buffer {
             BUFFER_ID.fetch_add(1, Ordering::Relaxed)
         );
 
-        match unsafe { vm_create(&name, size, wrap) } {
-            Err(err) => Err(err),
-            Ok(ptr) => Ok(Buffer {
-                ptr,
-                len: size + wrap,
-                size,
-            }),
-        }
+        unsafe { vm_create(&name, size, wrap) }
     }
 
     /// Returns the size of the circular buffer.
