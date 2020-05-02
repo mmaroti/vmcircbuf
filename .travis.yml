@@ -33,6 +33,12 @@ matrix:
 before_install:
   - rustup self update
 
+script:
+  - cargo build --verbose
+  - cargo test -- --nocapture
+  - cargo build --release --verbose
+  - cargo test --release -- --nocapture
+
 sudo: false
 
 notifications:
