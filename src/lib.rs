@@ -27,7 +27,7 @@ fn os_error(message: &'static str) -> Error {
 }
 
 #[cfg(unix)]
-unsafe fn os_page_size() -> Result<usize, Error> {
+unsafe fn vm_page_size() -> Result<usize, Error> {
     extern crate libc;
 
     let page = libc::sysconf(libc::_SC_PAGESIZE);
@@ -39,7 +39,7 @@ unsafe fn os_page_size() -> Result<usize, Error> {
 }
 
 #[cfg(unix)]
-unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Error> {
+unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<*const u8, Error> {
     extern crate libc;
     use std::ffi::CString;
 
@@ -127,11 +127,7 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
 
     match err {
         Some(err) => Err(err),
-        None => Ok(Buffer {
-            ptr: first_copy as *const u8,
-            len: size + wrap,
-            size,
-        }),
+        None => Ok(first_copy as *const u8),
     }
 }
 
@@ -147,7 +143,7 @@ impl Drop for Buffer {
 }
 
 #[cfg(windows)]
-unsafe fn os_page_size() -> Result<usize, Error> {
+unsafe fn vm_page_size() -> Result<usize, Error> {
     extern crate winapi;
     use std::mem;
     use winapi::um::sysinfoapi::GetSystemInfo;
@@ -163,7 +159,7 @@ unsafe fn os_page_size() -> Result<usize, Error> {
 }
 
 #[cfg(windows)]
-unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Error> {
+unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<*const u8, Error> {
     extern crate winapi;
     use std::ffi::OsStr;
     use std::iter;
@@ -263,11 +259,7 @@ unsafe fn os_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
 
     match err {
         Some(err) => Err(err),
-        None => Ok(Buffer {
-            ptr: first_copy as *const u8,
-            len: size + wrap,
-            size,
-        }),
+        None => Ok(first_copy as *const u8),
     }
 }
 
@@ -290,7 +282,7 @@ impl Buffer {
     /// Returns the page size of the underlying operating system.
     #[inline]
     pub fn page_size() -> Result<usize, Error> {
-        unsafe { os_page_size() }
+        unsafe { vm_page_size() }
     }
 
     /// Creates a new circular buffer with the given `size` and `wrap`. The
@@ -316,7 +308,14 @@ impl Buffer {
             BUFFER_ID.fetch_add(1, Ordering::Relaxed)
         );
 
-        unsafe { os_create(&name, size, wrap) }
+        match unsafe { vm_create(&name, size, wrap) } {
+            Err(err) => Err(err),
+            Ok(ptr) => Ok(Buffer {
+                ptr,
+                len: size + wrap,
+                size,
+            }),
+        }
     }
 
     /// Returns the size of the circular buffer.
@@ -376,25 +375,21 @@ mod tests {
         let page = Buffer::page_size().unwrap();
         println!("page size: {}", page);
         let mut buffer = Buffer::new(2 * page, page).unwrap();
-        println!("buffer size: {}, wrap: {}", buffer.size(), buffer.wrap());
+        let size = buffer.size();
+        let wrap = buffer.wrap();
+        println!("buffer size: {}, wrap: {}", size, wrap);
 
         for (i, a) in buffer.as_mut_slice().iter_mut().enumerate() {
             let b = i % 101;
             *a = b as u8;
         }
 
-        for (i, a) in buffer.as_slice().iter().take(buffer.wrap()).enumerate() {
-            let b = (i + buffer.size()) % 101;
+        for (i, a) in buffer.as_slice().iter().take(wrap).enumerate() {
+            let b = (i + size) % 101;
             assert_eq!(*a, b as u8);
         }
-    }
 
-    #[test]
-    fn simple() {
-        let mut buffer = Buffer::new(0, 0).unwrap();
-        let size = buffer.size();
-        let wrap = buffer.wrap();
-        let slice: &mut [u8] = buffer.as_mut_slice();
+        let slice = buffer.as_mut_slice();
         assert_eq!(slice.len(), size + wrap);
 
         for a in slice.iter_mut() {
