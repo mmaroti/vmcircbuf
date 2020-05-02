@@ -29,14 +29,14 @@ fn os_error(message: &'static str) -> Error {
 }
 
 #[cfg(unix)]
-unsafe fn vm_page_size() -> Result<usize, Error> {
+unsafe fn vm_granularity() -> Result<usize, Error> {
     extern crate libc;
 
-    let page = libc::sysconf(libc::_SC_PAGESIZE);
-    if page <= 0 {
-        Err(os_error("page_size failed"))
+    let granularity = libc::sysconf(libc::_SC_PAGESIZE);
+    if granularity <= 0 {
+        Err(os_error("sysconf failed"))
     } else {
-        Ok(page as usize)
+        Ok(granularity as usize)
     }
 }
 
@@ -63,7 +63,7 @@ unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
     if err.is_none() {
         let ret = libc::ftruncate(file_desc, (size + wrap) as libc::off_t);
         if ret != 0 {
-            err = Some(os_error("first ftruncate failed"));
+            err = Some(os_error("ftruncate failed"));
         }
     }
 
@@ -149,18 +149,19 @@ impl Drop for Buffer {
 }
 
 #[cfg(windows)]
-unsafe fn vm_page_size() -> Result<usize, Error> {
+unsafe fn vm_granularity() -> Result<usize, Error> {
     extern crate winapi;
     use std::mem;
     use winapi::um::sysinfoapi::GetSystemInfo;
 
     let mut info = mem::zeroed();
     GetSystemInfo(&mut info);
-    let page = info.dwAllocationGranularity as usize;
-    if page <= 0 {
-        Err(Error::new(ErrorKind::Other, "invalid page size"))
+    // let granularity = info.dwAllocationGranularity as usize;
+    let granularity = info.dwPageSize as usize;
+    if granularity <= 0 {
+        Err(Error::new(ErrorKind::Other, "invalid granularity"))
     } else {
-        Ok(page)
+        Ok(granularity)
     }
 }
 
@@ -294,24 +295,27 @@ impl Drop for Buffer {
 }
 
 impl Buffer {
-    /// Returns the page size of the underlying operating system.
+    /// Returns the virtual memory mapping granularity of the underlying
+    /// operating system. On Unix this is the page size, which is typically
+    /// 4096 bytes. On Windows this is the allocation granularity, which is
+    /// typically 65536 bytes.
     #[inline]
-    pub fn page_size() -> Result<usize, Error> {
-        unsafe { vm_page_size() }
+    pub fn granularity() -> Result<usize, Error> {
+        unsafe { vm_granularity() }
     }
 
     /// Creates a new circular buffer with the given `size` and `wrap`. The
     /// returned `size` and `wrap` will be rounded up to an integer multiple
-    /// of the page size. The `wrap` value cannot be larger than `size`, and
-    /// both can be zero to get exactly the page size.
+    /// of the granularity. The `wrap` value cannot be larger than `size`, and
+    /// both can be zero to get exactly the granularity size.
     pub fn new(mut size: usize, mut wrap: usize) -> Result<Buffer, Error> {
-        let page = Buffer::page_size()?;
+        let granularity = Buffer::granularity()?;
 
-        // round up to a multiple of the page size, be safe
-        size = cmp::max(size, page);
-        size = ((size + page - 1) / page) * page;
-        wrap = cmp::max(wrap, page);
-        wrap = ((wrap + page - 1) / page) * page;
+        // round up to a multiple of the granularity size, be safe
+        size = cmp::max(size, granularity);
+        size = ((size + granularity - 1) / granularity) * granularity;
+        wrap = cmp::max(wrap, granularity);
+        wrap = ((wrap + granularity - 1) / granularity) * granularity;
         if wrap > size || size + wrap > i32::max_value() as usize {
             return Err(Error::new(ErrorKind::Other, "invalid sizes"));
         }
@@ -380,9 +384,9 @@ mod tests {
 
     #[test]
     fn wrap() {
-        let page = Buffer::page_size().unwrap();
-        println!("page size: {}", page);
-        let mut buffer = Buffer::new(2 * page, page).unwrap();
+        let granularity = Buffer::granularity().unwrap();
+        println!("granularity: {}", granularity);
+        let mut buffer = Buffer::new(2 * granularity, granularity).unwrap();
         let size = buffer.size();
         let wrap = buffer.wrap();
         println!("buffer size: {}, wrap: {}", size, wrap);
