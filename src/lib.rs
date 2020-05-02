@@ -15,6 +15,21 @@ static BUFFER_ID: AtomicI32 = AtomicI32::new(0);
 /// `wrap` many bytes overlap with the first `wrap` many bytes of the slice.
 /// This magic trick is performed with virtual memory, the same physical pages
 /// are mapped both at the start and at the end of the buffer.
+/// 
+/// # Examples
+/// ```
+/// let mut buffer = vmcircbuf::Buffer::new(0, 0).unwrap();
+/// let size = buffer.size();
+/// let wrap = buffer.wrap();
+/// let slice: &mut [u8] = buffer.as_mut_slice();
+/// assert_eq!(slice.len(), size + wrap);
+/// 
+/// for a in slice.iter_mut() {
+///     *a = 0;
+/// }
+/// slice[0] = 123;
+/// assert_eq!(slice[size], 123);
+/// ```
 pub struct Buffer {
     ptr: *const u8,
     len: usize,
@@ -156,8 +171,7 @@ unsafe fn vm_granularity() -> Result<usize, Error> {
 
     let mut info = mem::zeroed();
     GetSystemInfo(&mut info);
-    // let granularity = info.dwAllocationGranularity as usize;
-    let granularity = info.dwPageSize as usize;
+    let granularity = info.dwAllocationGranularity as usize;
     if granularity <= 0 {
         Err(Error::new(ErrorKind::Other, "invalid granularity"))
     } else {
