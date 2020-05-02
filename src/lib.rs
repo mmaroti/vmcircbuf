@@ -188,7 +188,7 @@ unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
 
     // create a paging file
     debug_assert!(size <= u32::max_value as usize);
-    let mut handle = CreateFileMappingW(
+    let handle = CreateFileMappingW(
         INVALID_HANDLE_VALUE,
         ptr::null_mut(),
         PAGE_READWRITE,
@@ -288,7 +288,7 @@ impl Drop for Buffer {
         debug_assert_ne!(ret, 0);
 
         let handle = self.handle as *mut c_void;
-        let ret = CloseHandle(handle);
+        let ret = unsafe { CloseHandle(handle) };
         debug_assert_ne!(ret, 0);
     }
 }
