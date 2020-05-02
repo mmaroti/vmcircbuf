@@ -165,7 +165,7 @@ unsafe fn vm_page_size() -> Result<usize, Error> {
 }
 
 #[cfg(windows)]
-unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<*const u8, Error> {
+unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Error> {
     extern crate winapi;
     use std::ffi::OsStr;
     use std::iter;
