@@ -8,7 +8,7 @@ authors = ["Miklos Maroti <mmaroti@gmail.com>"]
 repository = "https://github.com/mmaroti/vmcircbuf/"
 documentation = "https://docs.rs/vmcircbuf/"
 edition = "2018"
-keywords = ["mmap", "circbuf", "buffer", "ring", "circular", "page", "memory"]
+keywords = ["mmap", "circbuf", "buffer", "ring", "memory"]
 categories = ["data-structures", "os"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
