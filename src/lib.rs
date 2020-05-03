@@ -15,7 +15,7 @@ static BUFFER_ID: AtomicI32 = AtomicI32::new(0);
 /// `wrap` many bytes overlap with the first `wrap` many bytes of the slice.
 /// This magic trick is performed with virtual memory, the same physical pages
 /// are mapped both at the start and at the end of the buffer.
-/// 
+///
 /// # Examples
 /// ```
 /// let mut buffer = vmcircbuf::Buffer::new(0, 0).unwrap();
@@ -23,7 +23,7 @@ static BUFFER_ID: AtomicI32 = AtomicI32::new(0);
 /// let wrap = buffer.wrap();
 /// let slice: &mut [u8] = buffer.as_mut_slice();
 /// assert_eq!(slice.len(), size + wrap);
-/// 
+///
 /// for a in slice.iter_mut() {
 ///     *a = 0;
 /// }
@@ -187,7 +187,7 @@ unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
     use std::os::windows::ffi::OsStrExt;
     use winapi::shared::basetsd::SIZE_T;
     use winapi::shared::minwindef::DWORD;
-    use winapi::um::handleapi::INVALID_HANDLE_VALUE;
+    use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
     use winapi::um::memoryapi::{
         CreateFileMappingW, MapViewOfFileEx, UnmapViewOfFile, VirtualAlloc, VirtualFree,
         FILE_MAP_WRITE,
@@ -275,6 +275,10 @@ unsafe fn vm_create(name: &str, size: usize, wrap: usize) -> Result<Buffer, Erro
     if err.is_some() && first_copy != ptr::null_mut() {
         UnmapViewOfFile(first_copy);
         UnmapViewOfFile(first_copy.add(size));
+    }
+
+    if err.is_some() {
+        CloseHandle(handle);
     }
 
     match err {
