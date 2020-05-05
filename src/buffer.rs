@@ -305,7 +305,7 @@ impl Drop for Buffer {
         let ptr = self.ptr as *mut c_void;
         let ret = unsafe { UnmapViewOfFile(ptr) };
         debug_assert_ne!(ret, 0);
-        if (self.wrap > 0) {
+        if self.len > self.size {
             let ret = unsafe { UnmapViewOfFile(ptr.add(self.size)) };
             debug_assert_ne!(ret, 0);
         }
