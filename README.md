@@ -14,9 +14,10 @@ start and at the end of the buffer. This crate is working on Linux, OSX,
 Windows, iOS, Android, Raspberry PI and MIPS.
 
 ```
-let mut buffer = Buffer::new(0, 0).unwrap();
+let mut buffer = Buffer::new(1024, 100).unwrap();
 let size = buffer.size();
 let wrap = buffer.wrap();
+assert!(size >= 1024 && wrap >= 100);
 let slice: &mut [u8] = buffer.as_mut_slice();
 assert_eq!(slice.len(), size + wrap);
 

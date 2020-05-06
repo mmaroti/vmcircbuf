@@ -324,7 +324,6 @@ impl Buffer {
     /// operating system. On Unix this is the page size, which is typically
     /// 4096 bytes. On Windows this is the allocation granularity, which is
     /// typically 65536 bytes.
-    #[inline]
     pub fn granularity() -> Result<usize, Error> {
         let a = GRANULARITY.load(Ordering::Relaxed);
         if a != 0 {
