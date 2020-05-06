@@ -4,11 +4,14 @@
 use std::io::{Error, ErrorKind};
 use std::ops::{Index, IndexMut};
 use std::slice::SliceIndex;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::{process, ptr, slice};
 
 /// A unique identifier used to create shared memory mapped files.
 static BUFFER_ID: AtomicI32 = AtomicI32::new(0);
+
+/// Caches the granularity value reported by the operating system.
+static GRANULARITY: AtomicUsize = AtomicUsize::new(0);
 
 /// A raw circular buffer of bytes. The buffer holds exactly `size` many
 /// bytes but it is presented as a `size + wrap` length slice where the last
@@ -168,9 +171,9 @@ impl Drop for Buffer {
 unsafe fn vm_granularity() -> Result<usize, Error> {
     extern crate winapi;
     use std::mem;
-    use winapi::um::sysinfoapi::GetSystemInfo;
+    use winapi::um::sysinfoapi::{GetSystemInfo, SYSTEM_INFO};
 
-    let mut info = mem::zeroed();
+    let mut info: SYSTEM_INFO = mem::zeroed();
     GetSystemInfo(&mut info);
     let granularity = info.dwAllocationGranularity as usize;
     if granularity <= 0 {
@@ -323,7 +326,16 @@ impl Buffer {
     /// typically 65536 bytes.
     #[inline]
     pub fn granularity() -> Result<usize, Error> {
-        unsafe { vm_granularity() }
+        let a = GRANULARITY.load(Ordering::Relaxed);
+        if a != 0 {
+            Ok(a)
+        } else {
+            let b = unsafe { vm_granularity() };
+            if let Ok(a) = b {
+                GRANULARITY.store(a, Ordering::Relaxed);
+            }
+            b
+        }
     }
 
     /// Creates a new circular buffer with the given `size` and `wrap`. The
@@ -331,13 +343,12 @@ impl Buffer {
     /// of the granularity. This `size` parameter must be greater than zero.
     /// The `wrap` parameter cannot be larger than `size`, but it can be zero.
     pub fn new(mut size: usize, mut wrap: usize) -> Result<Buffer, Error> {
-        assert!(size > 0);
         let granularity = Buffer::granularity()?;
 
         // round up to a multiple of the granularity size, be safe
         size = ((size + granularity - 1) / granularity) * granularity;
         wrap = ((wrap + granularity - 1) / granularity) * granularity;
-        if wrap > size {
+        if size == 0 || wrap > size {
             return Err(Error::new(ErrorKind::Other, "invalid sizes"));
         }
 
@@ -409,6 +420,7 @@ mod tests {
     fn wrap() {
         let granularity = Buffer::granularity().unwrap();
         println!("granularity: {}", granularity);
+        assert_eq!(granularity, GRANULARITY.load(Ordering::Relaxed));
         let mut buffer = Buffer::new(2 * granularity, granularity).unwrap();
         let size = buffer.size();
         let wrap = buffer.wrap();
